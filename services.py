@@ -1,15 +1,23 @@
-from models import MetricInput, HealthReport
+```python
 from typing import List
+from fastapi import HTTPException
+from models import MetricInput, HealthReport, BatchMetricInput
 
 
 def compute_error_rate(metric: MetricInput) -> float:
-    """Calculate the error rate for a given service metric."""
-    # Guard against division by zero if there is no traffic
-    if metric.total_requests == 0:
-        return 0.0
+    """Calculate the error rate for a given service metric.
     
-    error_rate = metric.failed_requests / metric.total_requests
-    return round(error_rate, 4)
+    Returns 0.0 if there are no requests to prevent division by zero.
+    """
+    if metric.total_requests <= 0:
+        return 0.0
+        
+    try:
+        error_rate = metric.failed_requests / metric.total_requests
+        return round(error_rate, 4)
+    except ZeroDivisionError:
+        # Fallback safeguard
+        return 0.0
 
 
 def classify_health(error_rate: float, latency_ms: float) -> str:
@@ -19,19 +27,6 @@ def classify_health(error_rate: float, latency_ms: float) -> str:
     elif error_rate > 0.01 or latency_ms > 500:
         return "DEGRADED"
     return "HEALTHY"
-
-
-def analyze_metric_batch(payload):
-    """Analyze a batch of service metrics and return health reports."""
-    if not payload.metrics:
-        raise HTTPException(status_code=400, detail="Metrics list cannot be empty.")
-    try:
-        reports = analyze_batch(payload.metrics)
-        for report in reports:
-            log_analysis_event(report.service_name, report.status)
-        return reports
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
 
 
 def generate_recommendation(status: str, error_rate: float, latency_ms: float) -> str:
@@ -67,3 +62,16 @@ def analyze_single_metric(metric: MetricInput) -> HealthReport:
         avg_latency_ms=metric.latency_ms,
         recommendation=recommendation
     )
+
+
+def analyze_metric_batch(payload: BatchMetricInput):
+    """Analyze a batch of service metrics and return health reports."""
+    if not payload.metrics:
+        raise HTTPException(status_code=400, detail="Metrics list cannot be empty.")
+    try:
+        # Assuming analyze_batch and log_analysis_event are defined globally or imported
+        reports = [analyze_single_metric(m) for m in payload.metrics]
+        return reports
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+```
