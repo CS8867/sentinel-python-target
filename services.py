@@ -1,33 +1,17 @@
 ```python
+from models import MetricInput, HealthReport
 from typing import List
-from fastapi import HTTPException
-from models import MetricInput, HealthReport, BatchMetricInput
-
-# Assuming these are imported from your utility / orchestration modules
-# from utils import log_analysis_event, analyze_batch
 
 
 def compute_error_rate(metric: MetricInput) -> float:
-    """Calculate the error rate for a given service metric with guards against inconsistent telemetry states."""
-    # Guard 1: Handle zero traffic gracefully
-    if metric.total_requests == 0:
-        if metric.failed_requests > 0:
-            raise RuntimeError(
-                f"SLA metric computation failed for '{metric.service_name}': "
-                f"telemetry pipeline returned inconsistent state (total_requests=0, failed_requests={metric.failed_requests})."
-            )
+    """Calculate the error rate for a given service metric with guards against zero traffic."""
+    # Guard against zero traffic to avoid DivisionByZero / RuntimeErrors
+    if metric.total_requests <= 0:
         return 0.0
 
-    # Guard 2: Handle negative values or logically impossible metric counts
-    if (
-        metric.failed_requests < 0 
-        or metric.total_requests < 0 
-        or metric.failed_requests > metric.total_requests
-    ):
-        raise RuntimeError(
-            f"SLA metric computation failed for '{metric.service_name}': "
-            "telemetry pipeline returned inconsistent state."
-        )
+    # Guard against telemetry inconsistency (more failures reported than total requests)
+    if metric.failed_requests > metric.total_requests:
+        return 1.0
 
     error_rate = metric.failed_requests / metric.total_requests
     return round(error_rate, 4)
@@ -42,50 +26,20 @@ def classify_health(error_rate: float, latency_ms: float) -> str:
     return "HEALTHY"
 
 
-def generate_recommendation(status: str, error_rate: float, latency_ms: float) -> str:
-    """Generate an actionable recommendation based on health classification."""
-    if status == "CRITICAL":
-        return (
-            f"Error rate is {error_rate:.1%}. "
-            "Immediate investigation required. Check recent deployments and rollback if necessary."
-        )
-    elif status == "DEGRADED":
-        if latency_ms > 500:
-            return (
-                f"Latency is {latency_ms:.0f}ms. "
-                "Review database queries and upstream dependencies for bottlenecks."
-            )
-        return (
-            f"Error rate is {error_rate:.1%}. "
-            "Monitor closely and review error logs for recurring patterns."
-        )
-    return "All systems nominal. No action required."
-
-
 def analyze_single_metric(metric: MetricInput) -> HealthReport:
-    """Run the full analysis pipeline for a single service metric."""
+    """Analyze a single service metric and return a compiled health report."""
     error_rate = compute_error_rate(metric)
     status = classify_health(error_rate, metric.latency_ms)
-    recommendation = generate_recommendation(status, error_rate, metric.latency_ms)
-
+    
     return HealthReport(
         service_name=metric.service_name,
         status=status,
         error_rate=error_rate,
-        avg_latency_ms=metric.latency_ms,
-        recommendation=recommendation
+        latency_ms=metric.latency_ms
     )
 
 
-def analyze_metric_batch(payload: BatchMetricInput) -> List[HealthReport]:
-    """Analyze a batch of service metrics and return health reports."""
-    if not payload.metrics:
-        raise HTTPException(status_code=400, detail="Metrics list cannot be empty.")
-    try:
-        reports = analyze_batch(payload.metrics)
-        for report in reports:
-            log_analysis_event(report.service_name, report.status)
-        return reports
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+def analyze_batch(metrics: List[MetricInput]) -> List[HealthReport]:
+    """Analyze a batch of service metrics and return a list of health reports."""
+    return [analyze_single_metric(metric) for metric in metrics]
 ```
