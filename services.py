@@ -4,16 +4,25 @@ from typing import List
 
 
 def compute_error_rate(metric: MetricInput) -> float:
-    """Calculate the error rate for a given service metric with guards against zero traffic."""
-    # Guard against zero traffic to avoid DivisionByZero / RuntimeErrors
+    """
+    Calculate the error rate for a given service metric.
+    
+    Includes robust SRE guardrails to safely handle zero-traffic scenarios
+    and inconsistent telemetry pipeline payloads without raising runtime errors.
+    """
+    # Guard against zero or negative traffic (e.g., cold starts or inactive services)
     if metric.total_requests <= 0:
         return 0.0
 
-    # Guard against telemetry inconsistency (more failures reported than total requests)
-    if metric.failed_requests > metric.total_requests:
+    # Guard against negative failed requests anomalies
+    safe_failed_requests = max(0, metric.failed_requests)
+
+    # Guard against inconsistent state where failed requests exceed total requests.
+    # We cap at 1.0 (100%) to trigger a CRITICAL health status without crashing the API.
+    if safe_failed_requests > metric.total_requests:
         return 1.0
 
-    error_rate = metric.failed_requests / metric.total_requests
+    error_rate = safe_failed_requests / metric.total_requests
     return round(error_rate, 4)
 
 
@@ -27,10 +36,9 @@ def classify_health(error_rate: float, latency_ms: float) -> str:
 
 
 def analyze_single_metric(metric: MetricInput) -> HealthReport:
-    """Analyze a single service metric and return a compiled health report."""
+    """Analyze a single service metric and return a health report."""
     error_rate = compute_error_rate(metric)
     status = classify_health(error_rate, metric.latency_ms)
-    
     return HealthReport(
         service_name=metric.service_name,
         status=status,
@@ -40,6 +48,6 @@ def analyze_single_metric(metric: MetricInput) -> HealthReport:
 
 
 def analyze_batch(metrics: List[MetricInput]) -> List[HealthReport]:
-    """Analyze a batch of service metrics and return a list of health reports."""
+    """Analyze a batch of service metrics and return health reports."""
     return [analyze_single_metric(metric) for metric in metrics]
 ```
