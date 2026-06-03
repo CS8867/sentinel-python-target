@@ -1,44 +1,32 @@
 ```python
-import logging
 from typing import List
 from fastapi import HTTPException
 from models import MetricInput, HealthReport, BatchMetricInput
 
-# Configure logger for tracking telemetry events
-logger = logging.getLogger(__name__)
-
-
-def log_analysis_event(service_name: str, status: str):
-    """Log the outcome of a service health analysis."""
-    logger.info(f"SLA Analysis completed for '{service_name}' - Status: {status}")
+# Assuming these are imported from your utility / orchestration modules
+# from utils import log_analysis_event, analyze_batch
 
 
 def compute_error_rate(metric: MetricInput) -> float:
-    """
-    Calculate the error rate for a given service metric.
-    Gracefully handles idle states and detects genuine telemetry inconsistencies.
-    """
-    # 1. Handle Negative Values
-    if metric.total_requests < 0 or metric.failed_requests < 0:
-        raise RuntimeError(
-            f"SLA metric computation failed for '{metric.service_name}': "
-            f"telemetry pipeline returned negative metrics (total={metric.total_requests}, failed={metric.failed_requests})."
-        )
-
-    # 2. Handle Idle Service (Zero Traffic)
+    """Calculate the error rate for a given service metric with guards against inconsistent telemetry states."""
+    # Guard 1: Handle zero traffic gracefully
     if metric.total_requests == 0:
         if metric.failed_requests > 0:
             raise RuntimeError(
                 f"SLA metric computation failed for '{metric.service_name}': "
-                f"telemetry pipeline returned inconsistent state (failed_requests={metric.failed_requests} but total_requests=0)."
+                f"telemetry pipeline returned inconsistent state (total_requests=0, failed_requests={metric.failed_requests})."
             )
         return 0.0
 
-    # 3. Handle Logical Telemetry Inconsistencies
-    if metric.failed_requests > metric.total_requests:
+    # Guard 2: Handle negative values or logically impossible metric counts
+    if (
+        metric.failed_requests < 0 
+        or metric.total_requests < 0 
+        or metric.failed_requests > metric.total_requests
+    ):
         raise RuntimeError(
             f"SLA metric computation failed for '{metric.service_name}': "
-            f"telemetry pipeline returned inconsistent state (failed_requests={metric.failed_requests} exceeds total_requests={metric.total_requests})."
+            "telemetry pipeline returned inconsistent state."
         )
 
     error_rate = metric.failed_requests / metric.total_requests
@@ -89,11 +77,6 @@ def analyze_single_metric(metric: MetricInput) -> HealthReport:
     )
 
 
-def analyze_batch(metrics: List[MetricInput]) -> List[HealthReport]:
-    """Analyze a list of metric inputs and map them to health reports."""
-    return [analyze_single_metric(metric) for metric in metrics]
-
-
 def analyze_metric_batch(payload: BatchMetricInput) -> List[HealthReport]:
     """Analyze a batch of service metrics and return health reports."""
     if not payload.metrics:
@@ -104,6 +87,5 @@ def analyze_metric_batch(payload: BatchMetricInput) -> List[HealthReport]:
             log_analysis_event(report.service_name, report.status)
         return reports
     except Exception as e:
-        logger.error(f"Batch analysis failed: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 ```
