@@ -4,8 +4,10 @@ from typing import List
 
 def compute_error_rate(metric: MetricInput) -> float:
     """Calculate the error rate for a given service metric."""
-    # BUG: No guard against total_requests == 0.
-    # If a service reports zero traffic, this crashes the entire pipeline.
+    # Guard against division by zero if there is no traffic
+    if metric.total_requests == 0:
+        return 0.0
+    
     error_rate = metric.failed_requests / metric.total_requests
     return round(error_rate, 4)
 
@@ -17,6 +19,19 @@ def classify_health(error_rate: float, latency_ms: float) -> str:
     elif error_rate > 0.01 or latency_ms > 500:
         return "DEGRADED"
     return "HEALTHY"
+
+
+def analyze_metric_batch(payload):
+    """Analyze a batch of service metrics and return health reports."""
+    if not payload.metrics:
+        raise HTTPException(status_code=400, detail="Metrics list cannot be empty.")
+    try:
+        reports = analyze_batch(payload.metrics)
+        for report in reports:
+            log_analysis_event(report.service_name, report.status)
+        return reports
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 def generate_recommendation(status: str, error_rate: float, latency_ms: float) -> str:
@@ -52,8 +67,3 @@ def analyze_single_metric(metric: MetricInput) -> HealthReport:
         avg_latency_ms=metric.latency_ms,
         recommendation=recommendation
     )
-
-
-def analyze_batch(metrics: List[MetricInput]) -> List[HealthReport]:
-    """Analyze a batch of service metrics and return health reports."""
-    return [analyze_single_metric(m) for m in metrics]
